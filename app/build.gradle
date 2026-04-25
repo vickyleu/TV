@@ -3,9 +3,15 @@ plugins {
 }
 
 def localProps = new Properties()
-rootProject.file('local.properties').withInputStream {
-    localProps.load(it)
+def localPropsFile = rootProject.file('local.properties')
+if (localPropsFile.exists()) {
+    localPropsFile.withInputStream {
+        localProps.load(it)
+    }
 }
+def hasReleaseSigning = localProps['storeFile'] && localProps['keyAlias'] && localProps['storePassword']
+def routeReportUrl = (localProps['routeReportUrl'] ?: project.findProperty('routeReportUrl') ?: System.getenv('FONGMI_ROUTE_REPORT_URL') ?: 'http://10.0.0.1:18080/api/fongmi/play').toString()
+def escapedRouteReportUrl = routeReportUrl.replace("\\", "\\\\").replace("\"", "\\\"")
 
 android {
     namespace = 'com.fongmi.android.tv'
@@ -19,8 +25,9 @@ android {
         minSdk 24
         //noinspection ExpiredTargetSdkVersion
         targetSdk 28
-        versionCode 541
-        versionName "5.4.1"
+        versionCode 54201
+        versionName "5.4.2-doorplate.1"
+        buildConfigField "String", "ROUTE_REPORT_URL", "\"${escapedRouteReportUrl}\""
         javaCompileOptions {
             annotationProcessorOptions {
                 arguments = ["room.schemaLocation": "$projectDir/schemas".toString(), "eventBusIndex": "com.fongmi.android.tv.event.EventIndex"]
@@ -53,11 +60,13 @@ android {
     }
 
     signingConfigs {
-        release {
-            storeFile file(localProps['storeFile'])
-            keyAlias localProps['keyAlias']
-            keyPassword localProps['storePassword']
-            storePassword localProps['storePassword']
+        if (hasReleaseSigning) {
+            release {
+                storeFile file(localProps['storeFile'])
+                keyAlias localProps['keyAlias']
+                keyPassword localProps['storePassword']
+                storePassword localProps['storePassword']
+            }
         }
     }
 
@@ -65,7 +74,7 @@ android {
         release {
             minifyEnabled = true
             shrinkResources = true
-            signingConfig = signingConfigs.release
+            if (hasReleaseSigning) signingConfig = signingConfigs.release
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro', 'proguard-rules-media.pro'
         }
     }

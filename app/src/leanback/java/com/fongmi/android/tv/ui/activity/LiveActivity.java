@@ -48,6 +48,7 @@ import com.fongmi.android.tv.model.LiveViewModel;
 import com.fongmi.android.tv.player.PlayerHelper;
 import com.fongmi.android.tv.player.PlayerManager;
 import com.fongmi.android.tv.player.Source;
+import com.fongmi.android.tv.route.RouteReporter;
 import com.fongmi.android.tv.service.PlaybackService;
 import com.fongmi.android.tv.ui.adapter.ChannelAdapter;
 import com.fongmi.android.tv.ui.adapter.EpgDataAdapter;
@@ -742,6 +743,7 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
 
     private void start(Result result) {
         mPlaybackKey = result.getRealUrl();
+        RouteReporter.reportLive(mPlaybackKey, mChannel, mGroup, getHome());
         startPlayer(mPlaybackKey, result, false, getHome().getTimeout(), buildMetadata());
     }
 
