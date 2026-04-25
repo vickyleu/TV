@@ -68,6 +68,7 @@ import com.fongmi.android.tv.utils.PermissionUtil;
 import com.fongmi.android.tv.utils.ResUtil;
 import com.fongmi.android.tv.utils.UrlUtil;
 import com.github.catvod.net.OkHttp;
+import com.github.catvod.utils.Path;
 import com.google.common.collect.Lists;
 
 import org.greenrobot.eventbus.Subscribe;
@@ -75,10 +76,16 @@ import org.greenrobot.eventbus.ThreadMode;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
 
 public class HomeActivity extends BaseActivity implements CustomTitleView.Listener, VodPresenter.OnClickListener, FuncPresenter.OnClickListener, HistoryPresenter.OnClickListener {
+
+    private static final String DEFAULT_LIVE_CONFIG = "0jsm.json";
+    private static final String DEFAULT_LIVE_CONFIG_NAME = "0jsm";
+    private static final String LEGACY_DEFAULT_CONFIG_URL = "file:/sdcard/" + DEFAULT_LIVE_CONFIG;
 
     private ActivityHomeBinding mBinding;
     private ArrayObjectAdapter mHistoryAdapter;
@@ -196,9 +203,36 @@ public class HomeActivity extends BaseActivity implements CustomTitleView.Listen
     }
 
     private void initConfig() {
+        restoreDefaultConfigs();
         VodConfig.get().init().load(getCallback());
         LiveConfig.get().init().load();
         WallConfig.get().init();
+    }
+
+    private void restoreDefaultConfigs() {
+        File privateFile = Path.files(DEFAULT_LIVE_CONFIG);
+        if (!privateFile.exists()) copyLegacyLiveConfig(privateFile);
+        if (privateFile.exists()) {
+            String url = "file:" + privateFile.getAbsolutePath();
+            restoreDefaultConfig(0, VodConfig.getUrl(), url);
+            restoreDefaultConfig(1, LiveConfig.getUrl(), url);
+            return;
+        }
+        File legacyFile = new File("/sdcard/" + DEFAULT_LIVE_CONFIG);
+        if (!legacyFile.exists()) return;
+        restoreDefaultConfig(0, VodConfig.getUrl(), LEGACY_DEFAULT_CONFIG_URL);
+        restoreDefaultConfig(1, LiveConfig.getUrl(), LEGACY_DEFAULT_CONFIG_URL);
+    }
+
+    private void restoreDefaultConfig(int type, String currentUrl, String defaultUrl) {
+        if (defaultUrl.equals(currentUrl)) return;
+        if (!TextUtils.isEmpty(currentUrl) && !LEGACY_DEFAULT_CONFIG_URL.equals(currentUrl)) return;
+        Config.find(defaultUrl, DEFAULT_LIVE_CONFIG_NAME, type).update();
+    }
+
+    private void copyLegacyLiveConfig(File privateFile) {
+        String data = Path.read(new File("/sdcard/" + DEFAULT_LIVE_CONFIG));
+        if (!data.isEmpty()) Path.write(privateFile, data.getBytes(StandardCharsets.UTF_8));
     }
 
     private Callback getCallback() {

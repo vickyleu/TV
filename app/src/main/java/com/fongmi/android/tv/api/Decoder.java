@@ -1,12 +1,15 @@
 package com.fongmi.android.tv.api;
 
+import android.net.Uri;
 import android.util.Base64;
 
 import com.fongmi.android.tv.utils.UrlUtil;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.utils.Json;
+import com.github.catvod.utils.Path;
 import com.github.catvod.utils.Util;
 
+import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -23,12 +26,19 @@ public class Decoder {
     private static final Pattern JS_URI = Pattern.compile("\"(\\.|\\.\\.)/(.?|.+?)\\.js\\?(.?|.+?)\"");
 
     public static String getJson(String url, String tag) throws Exception {
+        if ("file".equals(UrlUtil.scheme(url))) return verify(url, readFile(url));
         try (Response res = OkHttp.newCall(url, tag).execute()) {
             HttpUrl httpUrl = res.request().url();
             int size = HttpUrl.parse(url).querySize();
             if (httpUrl.querySize() == size) url = httpUrl.toString();
             return verify(url, res.body().string());
         }
+    }
+
+    private static String readFile(String url) {
+        File file = new File(Uri.parse(url).getPath());
+        String data = Path.read(file);
+        return data.isEmpty() ? Path.read(Path.local(url)) : data;
     }
 
     private static String verify(String url, String data) throws Exception {
