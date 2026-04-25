@@ -24,6 +24,11 @@ public class ChannelAdapter extends RecyclerView.Adapter<ChannelAdapter.ViewHold
     }
 
     public void addAll(List<Channel> items) {
+        if (sameItems(items)) {
+            mItems.clear();
+            mItems.addAll(items);
+            return;
+        }
         mItems.clear();
         mItems.addAll(items);
         notifyDataSetChanged();
@@ -37,6 +42,7 @@ public class ChannelAdapter extends RecyclerView.Adapter<ChannelAdapter.ViewHold
     }
 
     public void clear() {
+        if (mItems.isEmpty()) return;
         mItems.clear();
         notifyDataSetChanged();
     }
@@ -46,8 +52,26 @@ public class ChannelAdapter extends RecyclerView.Adapter<ChannelAdapter.ViewHold
     }
 
     public void setSelected(Channel selected) {
-        for (Channel item : mItems) item.setSelected(selected);
+        boolean changed = false;
+        for (Channel item : mItems) {
+            boolean value = item.equals(selected);
+            if (item.isSelected() != value) changed = true;
+            item.setSelected(value);
+        }
+        if (!changed) return;
         notifyDataSetChanged();
+    }
+
+    private boolean sameItems(List<Channel> items) {
+        if (mItems.size() != items.size()) return false;
+        for (int i = 0; i < items.size(); i++) {
+            Channel old = mItems.get(i);
+            Channel item = items.get(i);
+            if (!old.getName().equals(item.getName())) return false;
+            if (!old.getNumber().equals(item.getNumber())) return false;
+            if (old.getUrls().size() != item.getUrls().size()) return false;
+        }
+        return true;
     }
 
     @Override
@@ -68,9 +92,20 @@ public class ChannelAdapter extends RecyclerView.Adapter<ChannelAdapter.ViewHold
         holder.binding.name.setText(item.getShow());
         holder.binding.number.setText(item.getNumber());
         holder.binding.getRoot().setSelected(item.isSelected());
-        holder.binding.getRoot().setRightListener(() -> mListener.showEpg(item));
-        holder.binding.getRoot().setOnClickListener(v -> mListener.onItemClick(item));
-        holder.binding.getRoot().setOnLongClickListener(v -> mListener.onLongClick(item));
+        holder.binding.getRoot().setRightListener(() -> {
+            int adapterPosition = holder.getBindingAdapterPosition();
+            if (adapterPosition == RecyclerView.NO_POSITION) return;
+            mListener.showEpg(mItems.get(adapterPosition));
+        });
+        holder.binding.getRoot().setOnClickListener(v -> {
+            int adapterPosition = holder.getBindingAdapterPosition();
+            if (adapterPosition == RecyclerView.NO_POSITION) return;
+            mListener.onItemClick(mItems.get(adapterPosition));
+        });
+        holder.binding.getRoot().setOnLongClickListener(v -> {
+            int adapterPosition = holder.getBindingAdapterPosition();
+            return adapterPosition != RecyclerView.NO_POSITION && mListener.onLongClick(mItems.get(adapterPosition));
+        });
     }
 
     @Override

@@ -73,31 +73,47 @@ import org.greenrobot.eventbus.ThreadMode;
 
 import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
 
 public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnClickListener, ChannelAdapter.OnClickListener, EpgDataAdapter.OnClickListener, CustomKeyDownLive.Listener, CustomLiveListView.Callback, TrackDialog.Listener, PassCallback, ConfigCallback, LiveCallback {
+
+    private static final long LIVE_BUFFER_FAILOVER_TIMEOUT = 7000;
 
     private ActivityLiveBinding mBinding;
     private ChannelAdapter mChannelAdapter;
     private EpgDataAdapter mEpgDataAdapter;
     private GroupAdapter mGroupAdapter;
+    private GroupAdapter mSubGroupAdapter;
     private Observer<Result> mObserveUrl;
     private CustomKeyDownLive mKeyDown;
     private Observer<Epg> mObserveEpg;
     private LiveViewModel mViewModel;
     private List<Group> mHides;
+    private List<Group> mLeafGroups;
+    private Map<String, List<Group>> mGroupTree;
+    private Map<String, Integer> mGroupWidthCache;
     private String mPlaybackKey;
+    private String mFailoverKey;
     private Channel mChannel;
-    private View mOldView;
+    private View mOldGroupView;
+    private View mOldSubGroupView;
+    private Group mRegion;
     private Group mGroup;
     private Runnable mR0;
     private Runnable mR1;
     private Runnable mR2;
     private Runnable mR3;
     private Runnable mR4;
+    private Runnable mR5;
     private Clock mClock;
     private View mFocus2;
+    private int mChannelFailoverCount;
+    private int mFailoverCount;
     private int count;
+    private boolean mHierarchy;
 
     public static void start(Context context) {
         context.startActivity(new Intent(context, LiveActivity.class).putExtra("empty", LiveConfig.isEmpty()));
@@ -160,11 +176,15 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
         mObserveEpg = this::setEpg;
         mObserveUrl = this::start;
         mHides = new ArrayList<>();
+        mLeafGroups = new ArrayList<>();
+        mGroupTree = new LinkedHashMap<>();
+        mGroupWidthCache = new LinkedHashMap<>();
         mR0 = this::setActivated;
         mR1 = this::hideControl;
         mR2 = this::setTraffic;
         mR3 = this::hideInfo;
         mR4 = this::hideUI;
+        mR5 = this::onBufferTimeout;
         setRecyclerView();
         setVideoView();
         setViewModel();
@@ -174,6 +194,7 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
     @SuppressLint("ClickableViewAccessibility")
     protected void initEvent() {
         mBinding.group.setListener(this);
+        mBinding.subgroup.setListener(this);
         mBinding.channel.setListener(this);
         mBinding.epgData.setListener(this);
         mBinding.control.action.text.setOnClickListener(this::onTrack);
@@ -199,7 +220,13 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
         mBinding.group.addOnChildViewHolderSelectedListener(new OnChildViewHolderSelectedListener() {
             @Override
             public void onChildViewHolderSelected(@NonNull RecyclerView parent, @Nullable RecyclerView.ViewHolder child, int position, int subposition) {
-                if (mGroupAdapter.getItemCount() > 0) onChildSelected(child, mGroup = mGroupAdapter.get(position));
+                if (mGroupAdapter.getItemCount() > 0) onRegionSelected(child, mGroupAdapter.get(position));
+            }
+        });
+        mBinding.subgroup.addOnChildViewHolderSelectedListener(new OnChildViewHolderSelectedListener() {
+            @Override
+            public void onChildViewHolderSelected(@NonNull RecyclerView parent, @Nullable RecyclerView.ViewHolder child, int position, int subposition) {
+                if (mSubGroupAdapter.getItemCount() > 0) onSubGroupSelected(child, mSubGroupAdapter.get(position));
             }
         });
     }
@@ -209,6 +236,7 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
         mBinding.channel.setItemAnimator(null);
         mBinding.epgData.setItemAnimator(null);
         mBinding.group.setAdapter(mGroupAdapter = new GroupAdapter(this));
+        mBinding.subgroup.setAdapter(mSubGroupAdapter = new GroupAdapter(this, this::getSubGroupName));
         mBinding.channel.setAdapter(mChannelAdapter = new ChannelAdapter(this));
         mBinding.epgData.setAdapter(mEpgDataAdapter = new EpgDataAdapter(this));
     }
@@ -239,7 +267,6 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
         mViewModel.live().observe(this, live -> {
             mViewModel.parseXml(live);
             setGroup(live);
-            setWidth(live);
         });
     }
 
@@ -272,27 +299,103 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
     }
 
     private void setGroup(Live live) {
-        List<Group> items = new ArrayList<>();
-        for (Group group : live.getGroups()) (group.isHidden() ? mHides : items).add(group);
+        mHierarchy = LiveConfig.get().isMergedLive(live);
+        mHides.clear();
+        mLeafGroups.clear();
+        mGroupTree.clear();
+        if (!mHierarchy) {
+            mSubGroupAdapter.clear();
+            mBinding.subgroup.setVisibility(View.GONE);
+        }
+        List<Group> items = mHierarchy ? getTreeGroups(live) : getFlatGroups(live);
         mGroupAdapter.addAll(items);
-        setPosition(LiveConfig.get().findKeepPosition(items));
+        setWidth(live);
+        if (restoreGroupPosition()) return;
+        setPosition(LiveConfig.get().findKeepPosition(mHierarchy ? mLeafGroups : items));
+    }
+
+    private List<Group> getFlatGroups(Live live) {
+        List<Group> items = new ArrayList<>();
+        for (Group group : live.getGroups()) {
+            if (group.isHidden()) mHides.add(group);
+            else items.add(group);
+        }
+        return items;
+    }
+
+    private List<Group> getTreeGroups(Live live) {
+        List<Group> items = new ArrayList<>();
+        for (Group group : live.getGroups()) {
+            if (group.isHidden()) {
+                mHides.add(group);
+            } else if (group.isKeep() || !isTreeLeaf(group)) {
+                items.add(group);
+                mLeafGroups.add(group);
+            } else {
+                String region = getRegionName(group);
+                if (!mGroupTree.containsKey(region)) {
+                    mGroupTree.put(region, new ArrayList<>());
+                    items.add(Group.create(region, false));
+                }
+                mGroupTree.get(region).add(group);
+                mLeafGroups.add(group);
+            }
+        }
+        return items;
+    }
+
+    private boolean restoreGroupPosition() {
+        if (mChannel == null || mGroup == null) return false;
+        if (mHierarchy) {
+            Group group = findLeafGroup(mGroup);
+            if (group == null) return false;
+            group.setPosition(mGroup.getPosition());
+            showLeafGroup(group);
+            return true;
+        }
+        int groupPosition = mGroupAdapter.indexOf(mGroup);
+        if (groupPosition < 0) return false;
+        mBinding.group.setSelectedPosition(groupPosition);
+        mChannelAdapter.addAll(setWidth(mGroup).getChannel());
+        int channelPosition = Math.max(mGroup.getPosition(), 0);
+        if (channelPosition < mChannelAdapter.getItemCount()) mBinding.channel.setSelectedPosition(channelPosition);
+        return true;
     }
 
     private void setWidth(Live live) {
+        if (mHierarchy) {
+            setListWidth(mBinding.group, mGroupAdapter.unmodifiableList(), Group::getName);
+            setSubGroupWidth();
+            return;
+        }
         int padding = ResUtil.dp2px(52);
         if (live.getWidth() == 0) for (Group item : live.getGroups()) live.setWidth(Math.max(live.getWidth(), ResUtil.getTextWidth(item.getName(), 16)));
         int width = live.getWidth() == 0 ? 0 : Math.min(live.getWidth() + padding, ResUtil.getScreenWidth() / 4);
         setWidth(mBinding.group, width);
+        setWidth(mBinding.subgroup, 0);
     }
 
     private Group setWidth(Group group) {
         int logo = ResUtil.dp2px(60);
         int padding = ResUtil.dp2px(64);
         if (group.isKeep()) group.setWidth(0);
+        if (group.getWidth() == 0 && mGroupWidthCache.containsKey(group.getName())) group.setWidth(mGroupWidthCache.get(group.getName()));
         if (group.getWidth() == 0) for (Channel item : group.getChannel()) group.setWidth(Math.max(group.getWidth(), (item.getLogo().isEmpty() ? 0 : logo) + ResUtil.getTextWidth(item.getNumber() + item.getName(), 16)));
+        if (group.getWidth() != 0) mGroupWidthCache.put(group.getName(), group.getWidth());
         int width = group.getWidth() == 0 ? 0 : Math.min(group.getWidth() + padding, ResUtil.getScreenWidth() / 2);
         setWidth(mBinding.channel, width);
         return group;
+    }
+
+    private void setSubGroupWidth() {
+        setListWidth(mBinding.subgroup, mSubGroupAdapter.unmodifiableList(), this::getSubGroupName);
+    }
+
+    private void setListWidth(View view, List<Group> groups, Function<Group, String> display) {
+        int padding = ResUtil.dp2px(52);
+        int width = 0;
+        for (Group item : groups) width = Math.max(width, ResUtil.getTextWidth(display.apply(item), 16));
+        setWidth(view, width == 0 ? 0 : Math.min(width + padding, ResUtil.getScreenWidth() / 4));
     }
 
     private void setWidth(Epg epg) {
@@ -315,6 +418,10 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
 
     private void setPosition(int[] position) {
         if (position[0] == -1) return;
+        if (mHierarchy) {
+            setLeafPosition(position[0], position[1], true);
+            return;
+        }
         int size = mGroupAdapter.getItemCount();
         if (size == 1 || position[0] >= size) return;
         mGroup = mGroupAdapter.get(position[0]);
@@ -327,6 +434,11 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
     private void setPosition() {
         if (mChannel == null) return;
         mGroup = mChannel.getGroup();
+        if (mHierarchy) {
+            Group group = findLeafGroup(mGroup);
+            if (group != null) showLeafGroup(group);
+            return;
+        }
         int position = mGroupAdapter.indexOf(mGroup);
         boolean change = mBinding.group.getSelectedPosition() != position;
         if (change) mBinding.group.setSelectedPosition(position);
@@ -334,12 +446,90 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
         mBinding.channel.setSelectedPosition(mGroup.getPosition());
     }
 
-    private void onChildSelected(@Nullable RecyclerView.ViewHolder child, Group group) {
-        if (mOldView != null) mOldView.setSelected(false);
-        if ((mOldView = child != null ? child.itemView : null) == null) return;
-        mOldView.setSelected(true);
+    private void setLeafPosition(int groupPosition, int channelPosition, boolean play) {
+        if (groupPosition < 0 || groupPosition >= mLeafGroups.size()) return;
+        Group group = mLeafGroups.get(groupPosition);
+        if (group.getChannel().isEmpty()) return;
+        group.setPosition(Math.min(Math.max(channelPosition, 0), group.getChannel().size() - 1));
+        showLeafGroup(group);
+        if (play) onItemClick(group.current());
+    }
+
+    private void showLeafGroup(Group group) {
+        mGroup = group;
+        if (isTreeLeaf(group)) {
+            setRegion(getRegionName(group), false);
+            int position = mSubGroupAdapter.indexOf(group);
+            if (position >= 0 && mBinding.subgroup.getSelectedPosition() != position) mBinding.subgroup.setSelectedPosition(position);
+        } else {
+            mRegion = group;
+            mBinding.subgroup.setVisibility(View.GONE);
+            setWidth(mBinding.subgroup, 0);
+            int position = mGroupAdapter.indexOf(group);
+            if (position >= 0 && mBinding.group.getSelectedPosition() != position) mBinding.group.setSelectedPosition(position);
+        }
+        mChannelAdapter.addAll(setWidth(group).getChannel());
+        int position = Math.max(group.getPosition(), 0);
+        if (position < mChannelAdapter.getItemCount()) mBinding.channel.setSelectedPosition(position);
+    }
+
+    private void setRegion(String region, boolean pickFirst) {
+        Group item = findTopGroup(region);
+        if (item == null) return;
+        mRegion = item;
+        int position = mGroupAdapter.indexOf(item);
+        if (position >= 0 && mBinding.group.getSelectedPosition() != position) mBinding.group.setSelectedPosition(position);
+        List<Group> groups = mGroupTree.get(region);
+        if (groups == null || groups.isEmpty()) return;
+        mBinding.subgroup.setVisibility(View.VISIBLE);
+        mSubGroupAdapter.addAll(groups);
+        setSubGroupWidth();
+        if (pickFirst) showLeafGroup(groups.get(0));
+    }
+
+    private void onRegionSelected(@Nullable RecyclerView.ViewHolder child, Group group) {
+        mOldGroupView = selectChild(mOldGroupView, child);
+        if (mHierarchy && mGroupTree.containsKey(group.getName())) setRegion(group.getName(), true);
+        else onItemClick(group);
+        resetPass();
+    }
+
+    private void onSubGroupSelected(@Nullable RecyclerView.ViewHolder child, Group group) {
+        mOldSubGroupView = selectChild(mOldSubGroupView, child);
         onItemClick(group);
         resetPass();
+    }
+
+    private View selectChild(View old, @Nullable RecyclerView.ViewHolder child) {
+        if (old != null) old.setSelected(false);
+        View view = child == null ? null : child.itemView;
+        if (view != null) view.setSelected(true);
+        return view;
+    }
+
+    private boolean isTreeLeaf(Group group) {
+        return group != null && group.getName().contains(LiveConfig.MERGED_GROUP_SEPARATOR);
+    }
+
+    private String getRegionName(Group group) {
+        String[] split = group.getName().split(LiveConfig.MERGED_GROUP_SEPARATOR, 2);
+        return split.length > 0 ? split[0] : group.getName();
+    }
+
+    private String getSubGroupName(Group group) {
+        String[] split = group.getName().split(LiveConfig.MERGED_GROUP_SEPARATOR, 2);
+        return split.length > 1 ? split[1] : group.getName();
+    }
+
+    private Group findLeafGroup(Group group) {
+        if (group == null) return null;
+        for (Group item : mLeafGroups) if (item.getName().equals(group.getName())) return item;
+        return null;
+    }
+
+    private Group findTopGroup(String name) {
+        for (Group item : mGroupAdapter.unmodifiableList()) if (item.getName().equals(name)) return item;
+        return null;
     }
 
     private void setActivated() {
@@ -474,10 +664,13 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
 
     @Override
     protected void onError(String msg) {
+        cancelBufferTimeout();
         Track.delete(player().getKey());
         player().resetTrack();
         player().reset();
         player().stop();
+        if (autoSwitchLineOnError()) return;
+        if (autoSwitchChannelOnError()) return;
         showError(msg);
         startFlow();
     }
@@ -493,12 +686,17 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
         switch (state) {
             case Player.STATE_BUFFERING:
                 showProgress();
+                scheduleBufferTimeout();
                 break;
             case Player.STATE_READY:
                 hideProgress();
+                cancelBufferTimeout();
                 player().reset();
+                resetFailover();
+                resetChannelFailover();
                 break;
             case Player.STATE_ENDED:
+                cancelBufferTimeout();
                 checkEnded();
                 break;
         }
@@ -524,6 +722,7 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
         mBinding.epgData.setSelectedPosition(mChannel.getData(mViewModel.getZoneId()).getSelected());
         mBinding.epgData.setVisibility(View.VISIBLE);
         mBinding.channel.setVisibility(View.GONE);
+        mBinding.subgroup.setVisibility(View.GONE);
         mBinding.group.setVisibility(View.GONE);
         mBinding.epgData.requestFocus();
     }
@@ -531,6 +730,7 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
     @Override
     public void hideEpg() {
         mBinding.channel.setVisibility(View.VISIBLE);
+        mBinding.subgroup.setVisibility(mHierarchy && mRegion != null && mGroupTree.containsKey(mRegion.getName()) ? View.VISIBLE : View.GONE);
         mBinding.group.setVisibility(View.VISIBLE);
         mBinding.epgData.setVisibility(View.GONE);
         mBinding.channel.requestFocus();
@@ -547,6 +747,26 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
         mBinding.progress.getRoot().setVisibility(View.GONE);
         App.removeCallbacks(mR2);
         Traffic.reset();
+    }
+
+    private void scheduleBufferTimeout() {
+        if (mChannel == null || service() == null || !player().isLive()) return;
+        App.post(mR5, getBufferTimeout());
+    }
+
+    private void cancelBufferTimeout() {
+        App.removeCallbacks(mR5);
+    }
+
+    private long getBufferTimeout() {
+        long timeout = getHome().getTimeout();
+        return mChannel.isOnly() ? timeout : Math.min(timeout, LIVE_BUFFER_FAILOVER_TIMEOUT);
+    }
+
+    private void onBufferTimeout() {
+        if (mChannel == null || service() == null || !player().isLive()) return;
+        if (player().getPlaybackState() != Player.STATE_BUFFERING || player().isPlaying()) return;
+        onError(ResUtil.getString(R.string.error_play_timeout));
     }
 
     private void showError(String text) {
@@ -630,6 +850,11 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
 
     @Override
     public void onItemClick(Group item) {
+        if (mHierarchy && mGroupTree.containsKey(item.getName())) {
+            setRegion(item.getName(), true);
+            return;
+        }
+        mGroup = item;
         mChannelAdapter.addAll(setWidth(item).getChannel());
         mBinding.channel.setSelectedPosition(Math.max(item.getPosition(), 0));
         if (!item.isKeep() || ++count < 5 || mHides.isEmpty()) return;
@@ -643,6 +868,7 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
         if (!item.getData(mViewModel.getZoneId()).getList().isEmpty() && item.isSelected() && mChannel != null && mChannel.equals(item) && mChannel.getGroup().equals(mGroup)) {
             showEpg(item);
         } else if (mGroup != null) {
+            resetChannelFailover();
             mGroup.setPosition(mBinding.channel.getSelectedPosition());
             setChannel(item.group(mGroup));
             hideUI();
@@ -688,6 +914,7 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
 
     private void setChannel(Channel item) {
         App.post(mR0, 100);
+        resetFailover();
         mChannel = item;
         setArtwork();
         showInfo();
@@ -752,10 +979,15 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
         mBinding.widget.title.setText("");
         mEpgDataAdapter.clear();
         mChannelAdapter.clear();
+        mSubGroupAdapter.clear();
         mGroupAdapter.clear();
         mHides.clear();
+        mLeafGroups.clear();
+        mGroupTree.clear();
         mChannel = null;
+        mRegion = null;
         mGroup = null;
+        resetChannelFailover();
     }
 
     @Override
@@ -815,12 +1047,30 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
         while (iterator.hasNext()) {
             Group item = iterator.next();
             if (pass != null && !pass.equals(item.getPass())) continue;
+            if (mHierarchy && isTreeLeaf(item)) {
+                addTreeGroup(item);
+                if (first) showLeafGroup(item);
+                iterator.remove();
+                first = false;
+                continue;
+            }
             mGroupAdapter.add(mGroupAdapter.getItemCount(), item);
             if (first) mBinding.group.setSelectedPosition(position);
             if (first) onItemClick(mGroup = item);
             iterator.remove();
             first = false;
         }
+    }
+
+    private void addTreeGroup(Group item) {
+        String region = getRegionName(item);
+        if (!mGroupTree.containsKey(region)) {
+            mGroupTree.put(region, new ArrayList<>());
+            mGroupAdapter.add(mGroupAdapter.getItemCount(), Group.create(region, false));
+            setListWidth(mBinding.group, mGroupAdapter.unmodifiableList(), Group::getName);
+        }
+        mGroupTree.get(region).add(item);
+        mLeafGroups.add(item);
     }
 
     @Subscribe(threadMode = ThreadMode.MAIN)
@@ -859,6 +1109,46 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
         player().setMetadata(buildMetadata());
     }
 
+    private void resetFailover() {
+        mFailoverKey = "";
+        mFailoverCount = 0;
+    }
+
+    private void resetChannelFailover() {
+        mChannelFailoverCount = 0;
+    }
+
+    private String getFailoverKey() {
+        if (mChannel == null) return "";
+        String group = mChannel.getGroup() == null ? "" : mChannel.getGroup().getName();
+        return group + "/" + mChannel.getName();
+    }
+
+    private boolean autoSwitchLineOnError() {
+        if (mChannel == null || mChannel.isOnly()) return false;
+        String key = getFailoverKey();
+        if (!key.equals(mFailoverKey)) {
+            mFailoverKey = key;
+            mFailoverCount = 0;
+        }
+        int max = Math.max(0, mChannel.getUrls().size() - 1);
+        if (mFailoverCount >= max) return false;
+        mFailoverCount++;
+        nextLine(false);
+        Notify.show(getString(R.string.play_switch_flag, mChannel.getLine()));
+        return true;
+    }
+
+    private boolean autoSwitchChannelOnError() {
+        if (mChannel == null || mGroup == null || !Setting.isChange()) return false;
+        int max = Math.min(8, Math.max(0, mChannelAdapter.getItemCount() - 1));
+        if (max == 0 || mChannelFailoverCount >= max) return false;
+        mChannelFailoverCount++;
+        nextChannel();
+        Notify.show(getString(R.string.play_switch_channel, mChannel.getShow()));
+        return true;
+    }
+
     private void startFlow() {
         if (!Setting.isChange()) return;
         if (!mChannel.isLast()) nextLine(true);
@@ -883,6 +1173,7 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
     }
 
     private boolean nextGroup() {
+        if (mHierarchy) return moveLeafGroup(1);
         int position = mBinding.group.getSelectedPosition() + 1;
         if (position > mGroupAdapter.getItemCount() - 1) position = 0;
         if (mGroup.equals(mGroupAdapter.get(position))) return false;
@@ -895,6 +1186,7 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
     }
 
     private boolean prevGroup() {
+        if (mHierarchy) return moveLeafGroup(-1);
         int position = mBinding.group.getSelectedPosition() - 1;
         if (position < 0) position = mGroupAdapter.getItemCount() - 1;
         if (mGroup.equals(mGroupAdapter.get(position))) return false;
@@ -904,6 +1196,27 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
         mChannelAdapter.addAll(mGroup.getChannel());
         mGroup.setPosition(mGroup.getChannel().size() - 1);
         return true;
+    }
+
+    private boolean moveLeafGroup(int step) {
+        if (mLeafGroups.isEmpty() || mGroup == null) return false;
+        int position = indexOfLeafGroup(mGroup);
+        if (position < 0) return false;
+        for (int i = 0; i < mLeafGroups.size(); i++) {
+            position = (position + step + mLeafGroups.size()) % mLeafGroups.size();
+            Group group = mLeafGroups.get(position);
+            if (group.skip() || group.isEmpty()) continue;
+            group.setPosition(step > 0 ? 0 : group.getChannel().size() - 1);
+            showLeafGroup(group);
+            return true;
+        }
+        return false;
+    }
+
+    private int indexOfLeafGroup(Group group) {
+        if (group == null) return -1;
+        for (int i = 0; i < mLeafGroups.size(); i++) if (mLeafGroups.get(i).getName().equals(group.getName())) return i;
+        return -1;
     }
 
     private void checkNext() {
@@ -973,7 +1286,7 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
     @Override
     public void onFind(String number) {
         mBinding.widget.digital.setVisibility(View.GONE);
-        setPosition(LiveConfig.get().findByChannelNumber(number, mGroupAdapter.unmodifiableList()));
+        setPosition(LiveConfig.get().findByChannelNumber(number, mHierarchy ? mLeafGroups : mGroupAdapter.unmodifiableList()));
     }
 
     @Override

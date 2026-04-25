@@ -22,6 +22,7 @@ import java.time.ZoneId;
 public class LiveApi {
 
     public static void parse(@NonNull Live item) throws Exception {
+        if (LiveConfig.get().prepareMergedLive(item)) return;
         LiveParser.start(item.recent());
         item.getGroups().removeIf(Group::isEmpty);
         if (item.getGroups().isEmpty() || item.getGroups().get(0).isKeep()) return;

@@ -2,6 +2,7 @@ package com.fongmi.android.tv.api.config;
 
 import android.text.TextUtils;
 
+import com.fongmi.android.tv.R;
 import com.fongmi.android.tv.Setting;
 import com.fongmi.android.tv.api.Decoder;
 import com.fongmi.android.tv.api.LiveApi;
@@ -26,6 +27,7 @@ import com.google.gson.JsonObject;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
@@ -34,6 +36,8 @@ import java.util.stream.Collectors;
 public class LiveConfig extends BaseConfig {
 
     private static final String TAG = LiveConfig.class.getSimpleName();
+    private static final String MERGED_LIVE_NAME = "全部直播";
+    public static final String MERGED_GROUP_SEPARATOR = " / ";
 
     private Live home;
     private List<Live> lives;
@@ -129,6 +133,7 @@ public class LiveConfig extends BaseConfig {
         try {
             if (isLoaded()) return;
             super.ensureLoaded();
+            if (prepareMergedLive(getHome())) return;
             LiveApi.parse(getHome());
             LiveApi.parseXml(getHome());
         } catch (Throwable e) {
@@ -187,10 +192,111 @@ public class LiveConfig extends BaseConfig {
     private void initLive(Config config, JsonObject object) {
         String spider = Json.safeString(object, "spider");
         BaseLoader.get().parseJar(spider, false);
-        setLives(Json.safeListElement(object, "lives").stream().map(e -> Live.objectFrom(e, spider)).distinct().collect(Collectors.toCollection(ArrayList::new)));
-        Map<String, Live> items = Live.findAll().stream().collect(Collectors.toMap(Live::getName, Function.identity()));
-        getLives().forEach(live -> live.sync(items.get(live.getName())));
-        setHome(config, getLives().isEmpty() ? new Live() : getLives().stream().filter(item -> item.getName().equals(config.getHome())).findFirst().orElse(getLives().get(0)), false);
+        List<Live> parsedLives = Json.safeListElement(object, "lives").stream().map(e -> Live.objectFrom(e, spider)).distinct().collect(Collectors.toCollection(ArrayList::new));
+        Map<String, Live> storedLives = Live.findAll().stream().collect(Collectors.toMap(Live::getName, Function.identity()));
+        parsedLives.forEach(live -> live.sync(storedLives.get(live.getName())));
+        setLives(addMergedLive(parsedLives, storedLives));
+        setHome(config, chooseHome(config), false);
+    }
+
+    private List<Live> addMergedLive(List<Live> sourceLives, Map<String, Live> storedLives) {
+        if (sourceLives.size() <= 1) return sourceLives;
+        List<Live> items = new ArrayList<>();
+        items.add(new Live(MERGED_LIVE_NAME, "").sync(storedLives.get(MERGED_LIVE_NAME)));
+        items.addAll(sourceLives);
+        return items;
+    }
+
+    private Live chooseHome(Config config) {
+        Live merged = getLive(MERGED_LIVE_NAME);
+        if (!merged.isEmpty()) return merged;
+        return getLives().isEmpty() ? new Live() : getLives().stream().filter(item -> item.getName().equals(config.getHome())).findFirst().orElse(getLives().get(0));
+    }
+
+    public boolean isMergedLive(Live live) {
+        return live != null && MERGED_LIVE_NAME.equals(live.getName());
+    }
+
+    private List<Live> getSourceLives() {
+        return getLives().stream().filter(live -> !live.isEmpty() && !isMergedLive(live)).collect(Collectors.toList());
+    }
+
+    public boolean prepareMergedLive(Live live) {
+        return prepareMergedLive(live, null);
+    }
+
+    public boolean prepareMergedLive(Live live, Runnable onProgress) {
+        if (!isMergedLive(live)) return false;
+        loadMergedLive(live, onProgress);
+        return true;
+    }
+
+    private void loadMergedLive(Live merged, Runnable onProgress) {
+        merged.getGroups().clear();
+        for (Live live : getSourceLives()) {
+            try {
+                LiveApi.parse(live);
+                mergeLive(merged, live);
+                publishMergedLive(merged, onProgress);
+            } catch (Throwable e) {
+                e.printStackTrace();
+            }
+        }
+        publishMergedLive(merged, onProgress);
+    }
+
+    private void publishMergedLive(Live merged, Runnable onProgress) {
+        merged.getGroups().removeIf(group -> group.isKeep() || group.isEmpty());
+        if (merged.getGroups().isEmpty()) return;
+        merged.getGroups().add(0, Group.create(R.string.keep));
+        applyKeepsToGroups(merged.getGroups());
+        if (onProgress != null) onProgress.run();
+    }
+
+    private void mergeLive(Live merged, Live source) {
+        for (Group group : source.getGroups()) {
+            if (group.isKeep() || group.isEmpty()) continue;
+            String region = regionName(source.getName());
+            Group target = merged.find(Group.create(leafGroupName(region, source, group), false));
+            if (!group.getPass().isEmpty()) target.setPass(group.getPass());
+            group.getChannel().forEach(channel -> target.add(copyForMerged(channel, source.getName())));
+        }
+    }
+
+    private Channel copyForMerged(Channel channel, String sourceName) {
+        Channel item = Channel.create(channel);
+        List<String> urls = new ArrayList<>();
+        for (String url : channel.getUrls()) urls.add(labelUrl(url, sourceName));
+        item.setUrls(urls);
+        item.setIndex(0);
+        return item;
+    }
+
+    private String labelUrl(String url, String sourceName) {
+        return url.contains("$") ? url : url + "$" + sourceName;
+    }
+
+    private String leafGroupName(String region, Live live, Group group) {
+        String name = subGroupName(region, live, group);
+        return region + MERGED_GROUP_SEPARATOR + (name.isEmpty() ? live.getName() : name);
+    }
+
+    private String subGroupName(String region, Live live, Group group) {
+        String name = group.getName();
+        if (name.isEmpty() || name.equals(live.getName())) return "";
+        if (name.equals(region) || name.contains(region)) return "";
+        if (region.equals(live.getName())) return name;
+        return name;
+    }
+
+    private String regionName(String name) {
+        String lower = name.toLowerCase(Locale.ROOT);
+        if (name.contains("港澳台")) return "港澳台";
+        if (name.contains("香港") || lower.contains("hong") || lower.contains("hk")) return "香港";
+        if (name.contains("台湾") || name.contains("臺灣") || lower.contains("taiwan") || lower.contains("tw")) return "台湾";
+        if (name.contains("大陆") || name.contains("中国") || name.contains("中國") || lower.contains("migu") || lower.contains("ipv6")) return "大陆";
+        if (name.contains("国际") || lower.contains("global") || lower.contains("yuechan")) return "国际";
+        return name;
     }
 
     public void setKeep(Channel channel) {

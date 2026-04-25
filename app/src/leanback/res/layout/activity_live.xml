@@ -63,11 +63,24 @@
             tools:listitem="@layout/adapter_group" />
 
         <com.fongmi.android.tv.ui.custom.CustomLiveListView
-            android:id="@+id/channel"
+            android:id="@+id/subgroup"
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:clipChildren="false"
             android:translationX="-12dp"
+            android:clipToPadding="false"
+            android:padding="12dp"
+            android:visibility="gone"
+            tools:itemCount="5"
+            tools:listitem="@layout/adapter_group"
+            tools:visibility="visible" />
+
+        <com.fongmi.android.tv.ui.custom.CustomLiveListView
+            android:id="@+id/channel"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:clipChildren="false"
+            android:translationX="-24dp"
             android:clipToPadding="false"
             android:padding="12dp"
             tools:itemCount="5"
@@ -78,6 +91,7 @@
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:clipChildren="false"
+            android:translationX="-24dp"
             android:clipToPadding="false"
             android:padding="12dp"
             tools:itemCount="5"
@@ -85,4 +99,3 @@
 
     </androidx.appcompat.widget.LinearLayoutCompat>
 </FrameLayout>
-

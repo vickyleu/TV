@@ -12,18 +12,30 @@ import com.fongmi.android.tv.databinding.AdapterGroupBinding;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.Function;
 
 public class GroupAdapter extends RecyclerView.Adapter<GroupAdapter.ViewHolder> {
 
     private final OnClickListener mListener;
     private final List<Group> mItems;
+    private final Function<Group, String> mDisplay;
 
     public GroupAdapter(OnClickListener listener) {
+        this(listener, Group::getName);
+    }
+
+    public GroupAdapter(OnClickListener listener, Function<Group, String> display) {
         mListener = listener;
+        mDisplay = display;
         mItems = new ArrayList<>();
     }
 
     public void addAll(List<Group> items) {
+        if (sameItems(items)) {
+            mItems.clear();
+            mItems.addAll(items);
+            return;
+        }
         mItems.clear();
         mItems.addAll(items);
         notifyDataSetChanged();
@@ -35,8 +47,17 @@ public class GroupAdapter extends RecyclerView.Adapter<GroupAdapter.ViewHolder> 
     }
 
     public void clear() {
+        if (mItems.isEmpty()) return;
         mItems.clear();
         notifyDataSetChanged();
+    }
+
+    private boolean sameItems(List<Group> items) {
+        if (mItems.size() != items.size()) return false;
+        for (int i = 0; i < items.size(); i++) {
+            if (!mItems.get(i).getName().equals(items.get(i).getName())) return false;
+        }
+        return true;
     }
 
     public Group get(int position) {
@@ -65,8 +86,12 @@ public class GroupAdapter extends RecyclerView.Adapter<GroupAdapter.ViewHolder> 
     @Override
     public void onBindViewHolder(@NonNull ViewHolder holder, int position) {
         Group item = mItems.get(position);
-        holder.binding.name.setText(item.getName());
-        holder.binding.getRoot().setOnClickListener(v -> mListener.onItemClick(item));
+        holder.binding.name.setText(mDisplay.apply(item));
+        holder.binding.getRoot().setOnClickListener(v -> {
+            int adapterPosition = holder.getBindingAdapterPosition();
+            if (adapterPosition == RecyclerView.NO_POSITION) return;
+            mListener.onItemClick(mItems.get(adapterPosition));
+        });
     }
 
     public interface OnClickListener {
