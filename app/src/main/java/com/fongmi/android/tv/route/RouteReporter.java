@@ -14,12 +14,18 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 public class RouteReporter {
 
     private static final String TAG = "RouteReporter";
 
     public static void reportLive(String playUrl, Channel channel, Group group, Live live) {
+        reportLive(playUrl, channel, group, live, 0);
+    }
+
+    public static void reportLive(String playUrl, Channel channel, Group group, Live live, long waitMs) {
         String endpoint = BuildConfig.ROUTE_REPORT_URL;
         if (TextUtils.isEmpty(endpoint) || TextUtils.isEmpty(playUrl)) return;
         String host = hostFrom(playUrl);
@@ -27,7 +33,24 @@ public class RouteReporter {
         String groupName = group == null ? "" : group.getName();
         String line = channel == null ? "" : channel.getLine();
         String liveName = live == null ? "" : live.getName();
-        Task.execute(() -> post(endpoint, buildPayload(playUrl, host, channelName, groupName, line, liveName)));
+        String payload = buildPayload(playUrl, host, channelName, groupName, line, liveName);
+        if (waitMs <= 0) {
+            Task.execute(() -> post(endpoint, payload));
+            return;
+        }
+        CountDownLatch latch = new CountDownLatch(1);
+        Task.execute(() -> {
+            try {
+                post(endpoint, payload);
+            } finally {
+                latch.countDown();
+            }
+        });
+        try {
+            latch.await(waitMs, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private static String hostFrom(String playUrl) {

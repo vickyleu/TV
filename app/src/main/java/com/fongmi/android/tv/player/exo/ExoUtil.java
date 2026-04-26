@@ -43,6 +43,11 @@ import java.util.stream.Collectors;
 
 public class ExoUtil {
 
+    private static final int MIN_BUFFER_MS = 5_000;
+    private static final int MAX_BUFFER_MS = 15_000;
+    private static final int START_BUFFER_MS = 500;
+    private static final int REBUFFER_MS = 1_000;
+
     public static void setPlayerView(PlayerView view) {
         view.getSubtitleView().setStyle(getCaptionStyle());
         view.getSubtitleView().setApplyEmbeddedStyles(true);
@@ -92,7 +97,11 @@ public class ExoUtil {
     }
 
     private static LoadControl buildLoadControl() {
-        return new DefaultLoadControl.Builder().setBufferDurationsMs(DefaultLoadControl.DEFAULT_MIN_BUFFER_MS * Setting.getBuffer(), DefaultLoadControl.DEFAULT_MAX_BUFFER_MS * Setting.getBuffer(), DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS, DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS).build();
+        int buffer = Setting.getBuffer();
+        return new DefaultLoadControl.Builder()
+                .setBufferDurationsMs(MIN_BUFFER_MS * buffer, MAX_BUFFER_MS * buffer, START_BUFFER_MS, REBUFFER_MS)
+                .setPrioritizeTimeOverSizeThresholds(true)
+                .build();
     }
 
     private static TrackSelector buildTrackSelector() {

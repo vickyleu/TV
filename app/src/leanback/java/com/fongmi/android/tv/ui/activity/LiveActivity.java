@@ -82,6 +82,7 @@ import java.util.function.Function;
 public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnClickListener, ChannelAdapter.OnClickListener, EpgDataAdapter.OnClickListener, CustomKeyDownLive.Listener, CustomLiveListView.Callback, TrackDialog.Listener, PassCallback, ConfigCallback, LiveCallback {
 
     private static final long LIVE_BUFFER_FAILOVER_TIMEOUT = 7000;
+    private static final long ROUTE_REPORT_WAIT = 500;
 
     private ActivityLiveBinding mBinding;
     private ChannelAdapter mChannelAdapter;
@@ -974,7 +975,7 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
 
     private void start(Result result) {
         mPlaybackKey = result.getRealUrl();
-        RouteReporter.reportLive(mPlaybackKey, mChannel, mGroup, getHome());
+        RouteReporter.reportLive(mPlaybackKey, mChannel, mGroup, getHome(), ROUTE_REPORT_WAIT);
         startPlayer(mPlaybackKey, result, false, getHome().getTimeout(), buildMetadata());
     }
 

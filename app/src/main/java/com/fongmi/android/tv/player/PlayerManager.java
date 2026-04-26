@@ -312,6 +312,7 @@ public class PlayerManager implements ParseCallback {
 
     private void setMediaItem(long timeout) {
         if (spec == null || spec.getUrl() == null) return;
+        App.removeCallbacks(runnable);
         setDanmakus(spec.getDanmakus());
         engine.start(spec.checkUa());
         App.post(runnable, timeout);
@@ -366,7 +367,7 @@ public class PlayerManager implements ParseCallback {
 
         @Override
         public void onPlaybackStateChanged(int state) {
-            if (state != Player.STATE_IDLE) App.removeCallbacks(runnable);
+            if (state == Player.STATE_READY || state == Player.STATE_ENDED) App.removeCallbacks(runnable);
         }
 
         @Override
