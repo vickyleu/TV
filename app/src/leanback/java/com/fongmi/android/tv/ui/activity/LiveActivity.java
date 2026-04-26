@@ -8,6 +8,7 @@ import android.os.Bundle;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewParent;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -376,11 +377,10 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
     }
 
     private Group setWidth(Group group) {
-        int logo = ResUtil.dp2px(60);
         int padding = ResUtil.dp2px(64);
         if (group.isKeep()) group.setWidth(0);
         if (group.getWidth() == 0 && mGroupWidthCache.containsKey(group.getName())) group.setWidth(mGroupWidthCache.get(group.getName()));
-        if (group.getWidth() == 0) for (Channel item : group.getChannel()) group.setWidth(Math.max(group.getWidth(), (item.getLogo().isEmpty() ? 0 : logo) + ResUtil.getTextWidth(item.getNumber() + item.getName(), 16)));
+        if (group.getWidth() == 0) for (Channel item : group.getChannel()) group.setWidth(Math.max(group.getWidth(), ResUtil.getTextWidth(item.getNumber() + item.getName(), 16)));
         if (group.getWidth() != 0) mGroupWidthCache.put(group.getName(), group.getWidth());
         int width = group.getWidth() == 0 ? 0 : Math.min(group.getWidth() + padding, ResUtil.getScreenWidth() / 2);
         setWidth(mBinding.channel, width);
@@ -489,13 +489,17 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
 
     private void onRegionSelected(@Nullable RecyclerView.ViewHolder child, Group group) {
         mOldGroupView = selectChild(mOldGroupView, child);
-        if (mHierarchy && mGroupTree.containsKey(group.getName())) setRegion(group.getName(), true);
+        if (mHierarchy && mGroupTree.containsKey(group.getName())) {
+            boolean sameRegion = mRegion != null && mRegion.getName().equals(group.getName());
+            setRegion(group.getName(), !sameRegion);
+        }
         else onItemClick(group);
         resetPass();
     }
 
     private void onSubGroupSelected(@Nullable RecyclerView.ViewHolder child, Group group) {
         mOldSubGroupView = selectChild(mOldSubGroupView, child);
+        if (mGroup != null && mGroup.getName().equals(group.getName())) return;
         onItemClick(group);
         resetPass();
     }
@@ -1261,10 +1265,48 @@ public class LiveActivity extends PlaybackActivity implements GroupAdapter.OnCli
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        if (handleListFocus(event)) return true;
         if (isVisible(mBinding.control.getRoot())) setR1Callback();
         if (isVisible(mBinding.control.getRoot())) mFocus2 = getCurrentFocus();
         if (mKeyDown.hasEvent(event) && service() != null) mKeyDown.onKeyDown(event);
         return super.dispatchKeyEvent(event);
+    }
+
+    private boolean handleListFocus(KeyEvent event) {
+        if (!isVisible(mBinding.recycler) || event.getAction() != KeyEvent.ACTION_DOWN) return false;
+        View focus = getCurrentFocus();
+        if (event.getKeyCode() == KeyEvent.KEYCODE_DPAD_LEFT) {
+            if (isFocusInside(mBinding.channel, focus)) return requestListFocus(isVisible(mBinding.subgroup) ? mBinding.subgroup : mBinding.group);
+            if (isFocusInside(mBinding.subgroup, focus)) return requestListFocus(mBinding.group);
+        } else if (event.getKeyCode() == KeyEvent.KEYCODE_DPAD_RIGHT) {
+            if (isFocusInside(mBinding.group, focus)) return requestListFocus(isVisible(mBinding.subgroup) ? mBinding.subgroup : mBinding.channel);
+            if (isFocusInside(mBinding.subgroup, focus)) return requestListFocus(mBinding.channel);
+        }
+        return false;
+    }
+
+    private boolean requestListFocus(CustomLiveListView view) {
+        if (!isVisible(view) || view.getAdapter() == null || view.getAdapter().getItemCount() == 0) return false;
+        int position = Math.max(view.getSelectedPosition(), 0);
+        if (position >= view.getAdapter().getItemCount()) position = view.getAdapter().getItemCount() - 1;
+        RecyclerView.ViewHolder holder = view.findViewHolderForAdapterPosition(position);
+        if (holder != null) return holder.itemView.requestFocus();
+        int target = position;
+        view.setSelectedPosition(target);
+        view.post(() -> {
+            RecyclerView.ViewHolder child = view.findViewHolderForAdapterPosition(target);
+            if (child != null) child.itemView.requestFocus();
+        });
+        return true;
+    }
+
+    private boolean isFocusInside(View root, View focus) {
+        if (root == null || focus == null) return false;
+        if (root == focus) return true;
+        for (ViewParent parent = focus.getParent(); parent != null; parent = parent.getParent()) {
+            if (parent == root) return true;
+        }
+        return false;
     }
 
     @Override

@@ -17,20 +17,20 @@ public class ChannelAdapter extends RecyclerView.Adapter<ChannelAdapter.ViewHold
 
     private final OnClickListener mListener;
     private final List<Channel> mItems;
+    private int mSelectedPosition;
 
     public ChannelAdapter(OnClickListener listener) {
         mListener = listener;
         mItems = new ArrayList<>();
+        mSelectedPosition = RecyclerView.NO_POSITION;
     }
 
     public void addAll(List<Channel> items) {
-        if (sameItems(items)) {
-            mItems.clear();
-            mItems.addAll(items);
-            return;
-        }
+        boolean same = sameItems(items);
         mItems.clear();
         mItems.addAll(items);
+        mSelectedPosition = findSelectedPosition();
+        if (same) return;
         notifyDataSetChanged();
     }
 
@@ -44,6 +44,7 @@ public class ChannelAdapter extends RecyclerView.Adapter<ChannelAdapter.ViewHold
     public void clear() {
         if (mItems.isEmpty()) return;
         mItems.clear();
+        mSelectedPosition = RecyclerView.NO_POSITION;
         notifyDataSetChanged();
     }
 
@@ -52,14 +53,18 @@ public class ChannelAdapter extends RecyclerView.Adapter<ChannelAdapter.ViewHold
     }
 
     public void setSelected(Channel selected) {
-        boolean changed = false;
-        for (Channel item : mItems) {
+        int oldPosition = mSelectedPosition;
+        int newPosition = RecyclerView.NO_POSITION;
+        for (int i = 0; i < mItems.size(); i++) {
+            Channel item = mItems.get(i);
             boolean value = item.equals(selected);
-            if (item.isSelected() != value) changed = true;
+            if (value) newPosition = i;
             item.setSelected(value);
         }
-        if (!changed) return;
-        notifyDataSetChanged();
+        mSelectedPosition = newPosition;
+        if (oldPosition == newPosition) return;
+        if (oldPosition != RecyclerView.NO_POSITION && oldPosition < mItems.size()) notifyItemChanged(oldPosition);
+        if (newPosition != RecyclerView.NO_POSITION) notifyItemChanged(newPosition);
     }
 
     private boolean sameItems(List<Channel> items) {
@@ -72,6 +77,11 @@ public class ChannelAdapter extends RecyclerView.Adapter<ChannelAdapter.ViewHold
             if (old.getUrls().size() != item.getUrls().size()) return false;
         }
         return true;
+    }
+
+    private int findSelectedPosition() {
+        for (int i = 0; i < mItems.size(); i++) if (mItems.get(i).isSelected()) return i;
+        return RecyclerView.NO_POSITION;
     }
 
     @Override
@@ -88,7 +98,6 @@ public class ChannelAdapter extends RecyclerView.Adapter<ChannelAdapter.ViewHold
     @Override
     public void onBindViewHolder(@NonNull ViewHolder holder, int position) {
         Channel item = mItems.get(position);
-        item.loadLogo(holder.binding.logo);
         holder.binding.name.setText(item.getShow());
         holder.binding.number.setText(item.getNumber());
         holder.binding.getRoot().setSelected(item.isSelected());
