@@ -86,6 +86,7 @@ public class HomeActivity extends BaseActivity implements CustomTitleView.Listen
     private static final String DEFAULT_LIVE_CONFIG = "0jsm.json";
     private static final String DEFAULT_LIVE_CONFIG_NAME = "0jsm";
     private static final String LEGACY_DEFAULT_CONFIG_URL = "file:/sdcard/" + DEFAULT_LIVE_CONFIG;
+    private static final String R2S_DEFAULT_LIVE_CONFIG_URL = "http://10.0.0.1:18080/iptv/fongmi.json";
 
     private ActivityHomeBinding mBinding;
     private ArrayObjectAdapter mHistoryAdapter;
@@ -215,13 +216,12 @@ public class HomeActivity extends BaseActivity implements CustomTitleView.Listen
         if (privateFile.exists()) {
             String url = "file:" + privateFile.getAbsolutePath();
             restoreDefaultConfig(0, VodConfig.getUrl(), url);
-            restoreDefaultConfig(1, LiveConfig.getUrl(), url);
+            restoreDefaultConfig(1, LiveConfig.getUrl(), R2S_DEFAULT_LIVE_CONFIG_URL);
             return;
         }
         File legacyFile = new File("/sdcard/" + DEFAULT_LIVE_CONFIG);
-        if (!legacyFile.exists()) return;
-        restoreDefaultConfig(0, VodConfig.getUrl(), LEGACY_DEFAULT_CONFIG_URL);
-        restoreDefaultConfig(1, LiveConfig.getUrl(), LEGACY_DEFAULT_CONFIG_URL);
+        if (legacyFile.exists()) restoreDefaultConfig(0, VodConfig.getUrl(), LEGACY_DEFAULT_CONFIG_URL);
+        restoreDefaultConfig(1, LiveConfig.getUrl(), R2S_DEFAULT_LIVE_CONFIG_URL);
     }
 
     private void restoreDefaultConfig(int type, String currentUrl, String defaultUrl) {
