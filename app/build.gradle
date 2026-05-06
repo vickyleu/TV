@@ -9,7 +9,11 @@ if (localPropsFile.exists()) {
         localProps.load(it)
     }
 }
-def hasReleaseSigning = localProps['storeFile'] && localProps['keyAlias'] && localProps['storePassword']
+def signingStoreFile = (localProps['storeFile'] ?: System.getenv('FONGMI_KEYSTORE_FILE') ?: 'signing/fongmi-doorplate.keystore').toString()
+def signingStorePassword = (localProps['storePassword'] ?: System.getenv('FONGMI_KEYSTORE_PASSWORD') ?: 'doorplate-fongmi-tv').toString()
+def signingKeyAlias = (localProps['keyAlias'] ?: System.getenv('FONGMI_KEY_ALIAS') ?: 'fongmi-doorplate').toString()
+def signingKeyPassword = (localProps['keyPassword'] ?: localProps['storePassword'] ?: System.getenv('FONGMI_KEY_PASSWORD') ?: signingStorePassword).toString()
+def hasDoorplateSigning = signingStoreFile && signingKeyAlias && signingStorePassword && file(signingStoreFile).exists()
 def routeReportUrl = (localProps['routeReportUrl'] ?: project.findProperty('routeReportUrl') ?: System.getenv('FONGMI_ROUTE_REPORT_URL') ?: 'http://10.0.0.1:18080/api/fongmi/play').toString()
 def escapedRouteReportUrl = routeReportUrl.replace("\\", "\\\\").replace("\"", "\\\"")
 
@@ -60,21 +64,24 @@ android {
     }
 
     signingConfigs {
-        if (hasReleaseSigning) {
-            release {
-                storeFile file(localProps['storeFile'])
-                keyAlias localProps['keyAlias']
-                keyPassword localProps['storePassword']
-                storePassword localProps['storePassword']
+        if (hasDoorplateSigning) {
+            doorplate {
+                storeFile file(signingStoreFile)
+                keyAlias signingKeyAlias
+                keyPassword signingKeyPassword
+                storePassword signingStorePassword
             }
         }
     }
 
     buildTypes {
+        debug {
+            if (hasDoorplateSigning) signingConfig = signingConfigs.doorplate
+        }
         release {
             minifyEnabled = true
             shrinkResources = true
-            if (hasReleaseSigning) signingConfig = signingConfigs.release
+            if (hasDoorplateSigning) signingConfig = signingConfigs.doorplate
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro', 'proguard-rules-media.pro'
         }
     }
